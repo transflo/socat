@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Socat 端口转发服务创建脚本（支持批量端口）
+# iptables 端口转发脚本（支持批量端口）
 # 用法: ./create-socat-service.sh <target_host> <port1> [port2] [port3] ...
 # 示例: ./create-socat-service.sh example.com 57074
 # 示例: ./create-socat-service.sh example.com 57074 12693 27057
@@ -55,130 +55,182 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
-# 检查socat是否安装
-if ! command -v socat &> /dev/null; then
-    echo -e "${YELLOW}警告: 未检测到socat，请先安装:${NC}"
-    echo "  Ubuntu/Debian: sudo apt-get install -y socat"
-    echo "  CentOS/RHEL:   sudo yum install -y socat"
-    echo "  Arch Linux:    sudo pacman -S socat"
+# 检查iptables是否安装
+if ! command -v iptables &> /dev/null; then
+    echo -e "${YELLOW}警告: 未检测到iptables，请先安装:${NC}"
+    echo "  Ubuntu/Debian: sudo apt-get install -y iptables"
+    echo "  CentOS/RHEL:   sudo yum install -y iptables"
+    echo "  Arch Linux:    sudo pacman -S iptables"
     exit 1
 fi
 
-echo -e "${GREEN}开始创建socat端口转发服务...${NC}"
-echo -e "${BLUE}目标地址: ${TARGET_HOST}${NC}"
+# 解析目标主机IP（如果是域名）
+if [[ "$TARGET_HOST" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+    TARGET_IP=$TARGET_HOST
+else
+    echo -e "${YELLOW}解析目标主机域名: ${TARGET_HOST}${NC}"
+    TARGET_IP=$(getent hosts ${TARGET_HOST} | awk '{ print $1 }' | head -n1)
+    if [ -z "$TARGET_IP" ]; then
+        echo -e "${RED}错误: 无法解析域名 ${TARGET_HOST}${NC}"
+        exit 1
+    fi
+    echo -e "${GREEN}解析结果: ${TARGET_IP}${NC}"
+fi
+
+echo -e "${GREEN}开始创建iptables端口转发规则...${NC}"
+echo -e "${BLUE}目标地址: ${TARGET_HOST} (${TARGET_IP})${NC}"
 echo -e "${BLUE}端口列表: ${PORTS[*]}${NC}"
 echo -e "${BLUE}共 ${#PORTS[@]} 个端口${NC}"
 echo ""
 
-# 存储所有创建的服务名称
-SERVICES_TCP=()
-SERVICES_UDP=()
+# 启用IP转发
+echo -e "${YELLOW}启用IP转发...${NC}"
+if [ "$(sysctl -n net.ipv4.ip_forward)" != "1" ]; then
+    sysctl -w net.ipv4.ip_forward=1 > /dev/null
+    echo -e "${GREEN}✓ IP转发已启用${NC}"
+else
+    echo -e "${GREEN}✓ IP转发已启用（无需修改）${NC}"
+fi
 
-# 为每个端口创建服务
+# 确保IP转发在重启后保持
+if ! grep -q "^net.ipv4.ip_forward=1" /etc/sysctl.conf 2>/dev/null; then
+    echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
+fi
+
+# 检查并创建MASQUERADE规则（如果不存在）
+if ! iptables -t nat -C POSTROUTING -j MASQUERADE 2>/dev/null; then
+    echo -e "${YELLOW}添加MASQUERADE规则...${NC}"
+    iptables -t nat -A POSTROUTING -j MASQUERADE
+    echo -e "${GREEN}✓ MASQUERADE规则已添加${NC}"
+fi
+
+# 为每个端口创建iptables规则
+RULES_CREATED=0
 for LISTEN_PORT in "${PORTS[@]}"; do
     TARGET_PORT=$LISTEN_PORT  # 目标端口与监听端口相同
-    SERVICE_TCP="socat-tcp-${LISTEN_PORT}"
-    SERVICE_UDP="socat-udp-${LISTEN_PORT}"
     
-    SERVICES_TCP+=("${SERVICE_TCP}")
-    SERVICES_UDP+=("${SERVICE_UDP}")
+    echo -e "${YELLOW}[端口 ${LISTEN_PORT}] 创建转发规则...${NC}"
     
-    echo -e "${YELLOW}[端口 ${LISTEN_PORT}] 创建服务文件...${NC}"
-    
-    # 创建TCP服务文件
-    cat > /etc/systemd/system/${SERVICE_TCP}.service <<EOF
-[Unit]
-Description=Socat TCP Port Forwarding ${LISTEN_PORT} -> ${TARGET_HOST}:${TARGET_PORT}
-After=network.target
-
-[Service]
-Type=simple
-ExecStart=/usr/bin/socat TCP-LISTEN:${LISTEN_PORT},reuseaddr,fork TCP:${TARGET_HOST}:${TARGET_PORT}
-Restart=always
-RestartSec=5
-StandardOutput=journal
-StandardError=journal
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-    # 创建UDP服务文件
-    cat > /etc/systemd/system/${SERVICE_UDP}.service <<EOF
-[Unit]
-Description=Socat UDP Port Forwarding ${LISTEN_PORT} -> ${TARGET_HOST}:${TARGET_PORT}
-After=network.target
-
-[Service]
-Type=simple
-ExecStart=/usr/bin/socat UDP-LISTEN:${LISTEN_PORT},reuseaddr,fork UDP:${TARGET_HOST}:${TARGET_PORT}
-Restart=always
-RestartSec=5
-StandardOutput=journal
-StandardError=journal
-
-[Install]
-WantedBy=multi-user.target
-EOF
-done
-
-# 重新加载systemd配置
-echo ""
-echo -e "${YELLOW}重新加载systemd配置...${NC}"
-systemctl daemon-reload
-
-# 启用并启动所有服务
-echo -e "${YELLOW}启用并启动所有服务...${NC}"
-for SERVICE_TCP in "${SERVICES_TCP[@]}"; do
-    systemctl enable ${SERVICE_TCP} > /dev/null 2>&1
-    systemctl start ${SERVICE_TCP}
-done
-
-for SERVICE_UDP in "${SERVICES_UDP[@]}"; do
-    systemctl enable ${SERVICE_UDP} > /dev/null 2>&1
-    systemctl start ${SERVICE_UDP}
-done
-
-# 等待服务启动
-sleep 2
-
-# 检查服务状态
-echo ""
-echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${GREEN}所有服务创建完成！${NC}"
-echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo ""
-
-# 显示每个服务的简要状态
-for LISTEN_PORT in "${PORTS[@]}"; do
-    SERVICE_TCP="socat-tcp-${LISTEN_PORT}"
-    SERVICE_UDP="socat-udp-${LISTEN_PORT}"
-    
-    echo -e "${BLUE}端口 ${LISTEN_PORT}:${NC}"
-    if systemctl is-active --quiet ${SERVICE_TCP} && systemctl is-active --quiet ${SERVICE_UDP}; then
-        echo -e "  ${GREEN}✓${NC} TCP服务: ${SERVICE_TCP} (运行中)"
-        echo -e "  ${GREEN}✓${NC} UDP服务: ${SERVICE_UDP} (运行中)"
+    # TCP转发规则
+    if iptables -t nat -C PREROUTING -p tcp --dport ${LISTEN_PORT} -j DNAT --to-destination ${TARGET_IP}:${TARGET_PORT} 2>/dev/null; then
+        echo -e "  ${YELLOW}TCP规则已存在，跳过${NC}"
     else
-        echo -e "  ${RED}✗${NC} TCP服务: ${SERVICE_TCP} (状态异常)"
-        echo -e "  ${RED}✗${NC} UDP服务: ${SERVICE_UDP} (状态异常)"
-        echo "  查看详细状态: sudo systemctl status ${SERVICE_TCP}"
-        echo "  查看详细状态: sudo systemctl status ${SERVICE_UDP}"
+        iptables -t nat -A PREROUTING -p tcp --dport ${LISTEN_PORT} -j DNAT --to-destination ${TARGET_IP}:${TARGET_PORT}
+        echo -e "  ${GREEN}✓ TCP转发规则已创建${NC}"
+        RULES_CREATED=1
+    fi
+    
+    # UDP转发规则
+    if iptables -t nat -C PREROUTING -p udp --dport ${LISTEN_PORT} -j DNAT --to-destination ${TARGET_IP}:${TARGET_PORT} 2>/dev/null; then
+        echo -e "  ${YELLOW}UDP规则已存在，跳过${NC}"
+    else
+        iptables -t nat -A PREROUTING -p udp --dport ${LISTEN_PORT} -j DNAT --to-destination ${TARGET_IP}:${TARGET_PORT}
+        echo -e "  ${GREEN}✓ UDP转发规则已创建${NC}"
+        RULES_CREATED=1
+    fi
+    
+    # FORWARD链规则（允许转发）
+    if ! iptables -C FORWARD -p tcp -d ${TARGET_IP} --dport ${TARGET_PORT} -j ACCEPT 2>/dev/null; then
+        iptables -A FORWARD -p tcp -d ${TARGET_IP} --dport ${TARGET_PORT} -j ACCEPT
+    fi
+    if ! iptables -C FORWARD -p udp -d ${TARGET_IP} --dport ${TARGET_PORT} -j ACCEPT 2>/dev/null; then
+        iptables -A FORWARD -p udp -d ${TARGET_IP} --dport ${TARGET_PORT} -j ACCEPT
+    fi
+done
+
+# 保存iptables规则
+if [ $RULES_CREATED -eq 1 ]; then
+    echo ""
+    echo -e "${YELLOW}保存iptables规则...${NC}"
+    
+    # 检测系统类型并保存规则
+    if command -v iptables-save &> /dev/null; then
+        if [ -d /etc/iptables ]; then
+            iptables-save > /etc/iptables/rules.v4
+            echo -e "${GREEN}✓ 规则已保存到 /etc/iptables/rules.v4${NC}"
+        elif [ -f /etc/network/iptables.rules ]; then
+            iptables-save > /etc/network/iptables.rules
+            echo -e "${GREEN}✓ 规则已保存到 /etc/network/iptables.rules${NC}"
+        else
+            # 尝试创建保存目录
+            mkdir -p /etc/iptables
+            iptables-save > /etc/iptables/rules.v4
+            echo -e "${GREEN}✓ 规则已保存到 /etc/iptables/rules.v4${NC}"
+            
+            # 创建systemd服务以在启动时恢复规则
+            if [ ! -f /etc/systemd/system/iptables-restore.service ]; then
+                cat > /etc/systemd/system/iptables-restore.service <<EOF
+[Unit]
+Description=Restore iptables rules
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/sbin/iptables-restore /etc/iptables/rules.v4
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+                systemctl daemon-reload
+                systemctl enable iptables-restore.service > /dev/null 2>&1
+                echo -e "${GREEN}✓ 已创建iptables自动恢复服务${NC}"
+            fi
+        fi
+    else
+        echo -e "${YELLOW}警告: 未找到iptables-save命令，规则未保存${NC}"
+        echo -e "${YELLOW}请手动保存规则或安装iptables-persistent${NC}"
+    fi
+fi
+
+# 检查规则状态
+echo ""
+echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${GREEN}所有转发规则创建完成！${NC}"
+echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo ""
+
+# 显示每个端口的规则状态
+for LISTEN_PORT in "${PORTS[@]}"; do
+    echo -e "${BLUE}端口 ${LISTEN_PORT}:${NC}"
+    
+    # 检查TCP规则
+    if iptables -t nat -C PREROUTING -p tcp --dport ${LISTEN_PORT} -j DNAT --to-destination ${TARGET_IP}:${LISTEN_PORT} 2>/dev/null; then
+        echo -e "  ${GREEN}✓${NC} TCP转发: ${LISTEN_PORT} -> ${TARGET_IP}:${LISTEN_PORT}"
+    else
+        echo -e "  ${RED}✗${NC} TCP转发规则不存在"
+    fi
+    
+    # 检查UDP规则
+    if iptables -t nat -C PREROUTING -p udp --dport ${LISTEN_PORT} -j DNAT --to-destination ${TARGET_IP}:${LISTEN_PORT} 2>/dev/null; then
+        echo -e "  ${GREEN}✓${NC} UDP转发: ${LISTEN_PORT} -> ${TARGET_IP}:${LISTEN_PORT}"
+    else
+        echo -e "  ${RED}✗${NC} UDP转发规则不存在"
     fi
     echo ""
 done
 
 echo "常用命令:"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "查看所有NAT规则:"
+echo "  iptables -t nat -L -n -v"
+echo ""
+echo "查看特定端口规则:"
 for LISTEN_PORT in "${PORTS[@]}"; do
-    SERVICE_TCP="socat-tcp-${LISTEN_PORT}"
-    SERVICE_UDP="socat-udp-${LISTEN_PORT}"
-    echo "端口 ${LISTEN_PORT}:"
-    echo "  查看状态: sudo systemctl status ${SERVICE_TCP}"
-    echo "  查看状态: sudo systemctl status ${SERVICE_UDP}"
-    echo "  查看日志: sudo journalctl -u ${SERVICE_TCP} -f"
-    echo "  查看日志: sudo journalctl -u ${SERVICE_UDP} -f"
-    echo ""
+    echo "  端口 ${LISTEN_PORT}:"
+    echo "    iptables -t nat -L PREROUTING -n -v | grep ${LISTEN_PORT}"
 done
+echo ""
+echo "删除转发规则（示例，端口 ${PORTS[0]}）:"
+echo "  iptables -t nat -D PREROUTING -p tcp --dport ${PORTS[0]} -j DNAT --to-destination ${TARGET_IP}:${PORTS[0]}"
+echo "  iptables -t nat -D PREROUTING -p udp --dport ${PORTS[0]} -j DNAT --to-destination ${TARGET_IP}:${PORTS[0]}"
+echo ""
+echo "保存当前规则:"
+echo "  iptables-save > /etc/iptables/rules.v4"
+echo ""
+echo "恢复规则:"
+echo "  iptables-restore < /etc/iptables/rules.v4"
+echo ""
 
 # 配置系统内核参数
 echo -e "${YELLOW}配置系统内核参数...${NC}"
