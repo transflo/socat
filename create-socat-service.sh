@@ -182,7 +182,9 @@ done
 
 # 配置系统内核参数
 echo -e "${YELLOW}配置系统内核参数...${NC}"
-sudo cp /etc/sysctl.conf /etc/sysctl.conf.bk_$(date +%Y%m%d_%H%M%S) && sudo sh -c 'echo "kernel.pid_max = 65535
+cp /etc/sysctl.conf /etc/sysctl.conf.bk_$(date +%Y%m%d_%H%M%S)
+cat > /etc/sysctl.conf << 'SYSCTL_EOF'
+kernel.pid_max = 65535
 
 kernel.panic = 1
 
@@ -316,8 +318,10 @@ net.ipv4.conf.default.arp_announce = 2
 
 net.ipv4.conf.all.arp_ignore = 1
 
-net.ipv4.conf.default.arp_ignore = 1" > /etc/sysctl.conf' && sudo sysctl -p
+net.ipv4.conf.default.arp_ignore = 1
+SYSCTL_EOF
 
+sysctl -p > /dev/null 2>&1
 if [ $? -eq 0 ]; then
     echo -e "${GREEN}✓ 系统内核参数配置完成${NC}"
 else
