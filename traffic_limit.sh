@@ -92,12 +92,12 @@ get_interface_traffic() {
 
 # 检测流量最大的网络接口
 detect_busiest_interface() {
-    echo -e "${YELLOW}正在检测流量最大的网络接口...${NC}"
+    echo -e "${YELLOW}正在检测流量最大的网络接口...${NC}" >&2
     
     local interfaces=($(get_active_interfaces))
     
     if [ ${#interfaces[@]} -eq 0 ]; then
-        echo -e "${RED}错误: 未找到活动的网络接口${NC}"
+        echo -e "${RED}错误: 未找到活动的网络接口${NC}" >&2
         exit 1
     fi
     
@@ -129,7 +129,7 @@ detect_busiest_interface() {
         busiest_iface=${interfaces[0]}
     fi
     
-    echo -e "${GREEN}检测到流量最大的接口: $busiest_iface${NC}"
+    echo -e "${GREEN}检测到流量最大的接口: $busiest_iface${NC}" >&2
     echo "$busiest_iface"
 }
 
