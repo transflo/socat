@@ -82,6 +82,7 @@ if ! command -v gost &> /dev/null; then
     
     # 定义多个下载源（包括国内镜像）
     DOWNLOAD_URLS=(
+        "https://edgecname.gh-proxy.com/https://github.com/ginuerzh/gost/releases/download/v${GOST_VERSION}/gost_${GOST_VERSION}_linux_${GOST_ARCH}.tar.gz"
         "https://ghproxy.com/https://github.com/ginuerzh/gost/releases/download/v${GOST_VERSION}/gost_${GOST_VERSION}_linux_${GOST_ARCH}.tar.gz"
         "https://github.moeyy.xyz/https://github.com/ginuerzh/gost/releases/download/v${GOST_VERSION}/gost_${GOST_VERSION}_linux_${GOST_ARCH}.tar.gz"
         "https://gh.ddlc.top/https://github.com/ginuerzh/gost/releases/download/v${GOST_VERSION}/gost_${GOST_VERSION}_linux_${GOST_ARCH}.tar.gz"
