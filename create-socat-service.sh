@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# iptables 端口转发脚本（支持批量端口）
+# Gost 端口转发脚本（支持批量端口）
 # 用法: ./create-socat-service.sh <target_host> <port1> [port2] [port3] ...
 # 示例: ./create-socat-service.sh example.com 57074
 # 示例: ./create-socat-service.sh example.com 57074 12693 27057
@@ -55,184 +55,172 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
-# 检查iptables是否安装
-if ! command -v iptables &> /dev/null; then
-    echo -e "${YELLOW}警告: 未检测到iptables，请先安装:${NC}"
-    echo "  Ubuntu/Debian: sudo apt-get install -y iptables"
-    echo "  CentOS/RHEL:   sudo yum install -y iptables"
-    echo "  Arch Linux:    sudo pacman -S iptables"
-    exit 1
-fi
-
-# 解析目标主机IP（如果是域名）
-if [[ "$TARGET_HOST" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
-    TARGET_IP=$TARGET_HOST
-else
-    echo -e "${YELLOW}解析目标主机域名: ${TARGET_HOST}${NC}"
-    TARGET_IP=$(getent hosts ${TARGET_HOST} | awk '{ print $1 }' | head -n1)
-    if [ -z "$TARGET_IP" ]; then
-        echo -e "${RED}错误: 无法解析域名 ${TARGET_HOST}${NC}"
+# 检查gost是否安装
+if ! command -v gost &> /dev/null; then
+    echo -e "${YELLOW}未检测到gost，正在安装...${NC}"
+    
+    # 检测系统架构
+    ARCH=$(uname -m)
+    case ${ARCH} in
+        x86_64)
+            GOST_ARCH="amd64"
+            ;;
+        aarch64|arm64)
+            GOST_ARCH="arm64"
+            ;;
+        armv7l)
+            GOST_ARCH="armv7"
+            ;;
+        *)
+            echo -e "${RED}错误: 不支持的系统架构 ${ARCH}${NC}"
+            exit 1
+            ;;
+    esac
+    
+    # 下载最新版gost
+    GOST_VERSION="3.0.0-rc10"
+    DOWNLOAD_URL="https://github.com/ginuerzh/gost/releases/download/v${GOST_VERSION}/gost_${GOST_VERSION}_linux_${GOST_ARCH}.tar.gz"
+    
+    echo -e "${YELLOW}正在下载 gost ${GOST_VERSION} (${GOST_ARCH})...${NC}"
+    
+    TMP_DIR=$(mktemp -d)
+    cd ${TMP_DIR}
+    
+    if ! wget -q --show-progress "${DOWNLOAD_URL}" -O gost.tar.gz; then
+        echo -e "${RED}下载失败，请手动安装 gost${NC}"
+        echo "访问: https://github.com/ginuerzh/gost/releases"
+        rm -rf ${TMP_DIR}
         exit 1
     fi
-    echo -e "${GREEN}解析结果: ${TARGET_IP}${NC}"
+    
+    tar -xzf gost.tar.gz
+    mv gost /usr/local/bin/
+    chmod +x /usr/local/bin/gost
+    
+    rm -rf ${TMP_DIR}
+    
+    if command -v gost &> /dev/null; then
+        echo -e "${GREEN}✓ gost 安装成功${NC}"
+        gost -V
+    else
+        echo -e "${RED}✗ gost 安装失败${NC}"
+        exit 1
+    fi
 fi
 
-echo -e "${GREEN}开始创建iptables端口转发规则...${NC}"
-echo -e "${BLUE}目标地址: ${TARGET_HOST} (${TARGET_IP})${NC}"
+echo -e "${GREEN}开始创建 Gost 端口转发服务...${NC}"
+echo -e "${BLUE}目标地址: ${TARGET_HOST}${NC}"
 echo -e "${BLUE}端口列表: ${PORTS[*]}${NC}"
 echo -e "${BLUE}共 ${#PORTS[@]} 个端口${NC}"
 echo ""
 
-# 启用IP转发
-echo -e "${YELLOW}启用IP转发...${NC}"
-if [ "$(sysctl -n net.ipv4.ip_forward)" != "1" ]; then
-    sysctl -w net.ipv4.ip_forward=1 > /dev/null
-    echo -e "${GREEN}✓ IP转发已启用${NC}"
-else
-    echo -e "${GREEN}✓ IP转发已启用（无需修改）${NC}"
-fi
-
-# 确保IP转发在重启后保持
-if ! grep -q "^net.ipv4.ip_forward=1" /etc/sysctl.conf 2>/dev/null; then
-    echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
-fi
-
-# 检查并创建MASQUERADE规则（如果不存在）
-if ! iptables -t nat -C POSTROUTING -j MASQUERADE 2>/dev/null; then
-    echo -e "${YELLOW}添加MASQUERADE规则...${NC}"
-    iptables -t nat -A POSTROUTING -j MASQUERADE
-    echo -e "${GREEN}✓ MASQUERADE规则已添加${NC}"
-fi
-
-# 为每个端口创建iptables规则
-RULES_CREATED=0
+# 为每个端口创建gost服务
+SERVICES_CREATED=0
 for LISTEN_PORT in "${PORTS[@]}"; do
     TARGET_PORT=$LISTEN_PORT  # 目标端口与监听端口相同
+    SERVICE_NAME="gost-forward-${LISTEN_PORT}"
     
-    echo -e "${YELLOW}[端口 ${LISTEN_PORT}] 创建转发规则...${NC}"
+    echo -e "${YELLOW}[端口 ${LISTEN_PORT}] 创建转发服务...${NC}"
     
-    # TCP转发规则
-    if iptables -t nat -C PREROUTING -p tcp --dport ${LISTEN_PORT} -j DNAT --to-destination ${TARGET_IP}:${TARGET_PORT} 2>/dev/null; then
-        echo -e "  ${YELLOW}TCP规则已存在，跳过${NC}"
-    else
-        iptables -t nat -A PREROUTING -p tcp --dport ${LISTEN_PORT} -j DNAT --to-destination ${TARGET_IP}:${TARGET_PORT}
-        echo -e "  ${GREEN}✓ TCP转发规则已创建${NC}"
-        RULES_CREATED=1
+    # 停止现有服务（如果存在）
+    if systemctl is-active --quiet ${SERVICE_NAME}; then
+        systemctl stop ${SERVICE_NAME}
+        echo -e "  ${YELLOW}已停止现有服务${NC}"
     fi
     
-    # UDP转发规则
-    if iptables -t nat -C PREROUTING -p udp --dport ${LISTEN_PORT} -j DNAT --to-destination ${TARGET_IP}:${TARGET_PORT} 2>/dev/null; then
-        echo -e "  ${YELLOW}UDP规则已存在，跳过${NC}"
-    else
-        iptables -t nat -A PREROUTING -p udp --dport ${LISTEN_PORT} -j DNAT --to-destination ${TARGET_IP}:${TARGET_PORT}
-        echo -e "  ${GREEN}✓ UDP转发规则已创建${NC}"
-        RULES_CREATED=1
-    fi
-    
-    # FORWARD链规则（允许转发）
-    if ! iptables -C FORWARD -p tcp -d ${TARGET_IP} --dport ${TARGET_PORT} -j ACCEPT 2>/dev/null; then
-        iptables -A FORWARD -p tcp -d ${TARGET_IP} --dport ${TARGET_PORT} -j ACCEPT
-    fi
-    if ! iptables -C FORWARD -p udp -d ${TARGET_IP} --dport ${TARGET_PORT} -j ACCEPT 2>/dev/null; then
-        iptables -A FORWARD -p udp -d ${TARGET_IP} --dport ${TARGET_PORT} -j ACCEPT
-    fi
-done
-
-# 保存iptables规则
-if [ $RULES_CREATED -eq 1 ]; then
-    echo ""
-    echo -e "${YELLOW}保存iptables规则...${NC}"
-    
-    # 检测系统类型并保存规则
-    if command -v iptables-save &> /dev/null; then
-        if [ -d /etc/iptables ]; then
-            iptables-save > /etc/iptables/rules.v4
-            echo -e "${GREEN}✓ 规则已保存到 /etc/iptables/rules.v4${NC}"
-        elif [ -f /etc/network/iptables.rules ]; then
-            iptables-save > /etc/network/iptables.rules
-            echo -e "${GREEN}✓ 规则已保存到 /etc/network/iptables.rules${NC}"
-        else
-            # 尝试创建保存目录
-            mkdir -p /etc/iptables
-            iptables-save > /etc/iptables/rules.v4
-            echo -e "${GREEN}✓ 规则已保存到 /etc/iptables/rules.v4${NC}"
-            
-            # 创建systemd服务以在启动时恢复规则
-            if [ ! -f /etc/systemd/system/iptables-restore.service ]; then
-                cat > /etc/systemd/system/iptables-restore.service <<EOF
+    # 创建systemd服务文件
+    cat > /etc/systemd/system/${SERVICE_NAME}.service <<EOF
 [Unit]
-Description=Restore iptables rules
+Description=Gost Port Forward ${LISTEN_PORT} -> ${TARGET_HOST}:${TARGET_PORT}
 After=network.target
+Wants=network.target
 
 [Service]
-Type=oneshot
-ExecStart=/sbin/iptables-restore /etc/iptables/rules.v4
-RemainAfterExit=yes
+Type=simple
+ExecStart=/usr/local/bin/gost -L tcp://0.0.0.0:${LISTEN_PORT}/${TARGET_HOST}:${TARGET_PORT}
+Restart=always
+RestartSec=3
+User=root
 
 [Install]
 WantedBy=multi-user.target
 EOF
-                systemctl daemon-reload
-                systemctl enable iptables-restore.service > /dev/null 2>&1
-                echo -e "${GREEN}✓ 已创建iptables自动恢复服务${NC}"
-            fi
-        fi
-    else
-        echo -e "${YELLOW}警告: 未找到iptables-save命令，规则未保存${NC}"
-        echo -e "${YELLOW}请手动保存规则或安装iptables-persistent${NC}"
-    fi
-fi
-
-# 检查规则状态
-echo ""
-echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${GREEN}所有转发规则创建完成！${NC}"
-echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo ""
-
-# 显示每个端口的规则状态
-for LISTEN_PORT in "${PORTS[@]}"; do
-    echo -e "${BLUE}端口 ${LISTEN_PORT}:${NC}"
     
-    # 检查TCP规则
-    if iptables -t nat -C PREROUTING -p tcp --dport ${LISTEN_PORT} -j DNAT --to-destination ${TARGET_IP}:${LISTEN_PORT} 2>/dev/null; then
-        echo -e "  ${GREEN}✓${NC} TCP转发: ${LISTEN_PORT} -> ${TARGET_IP}:${LISTEN_PORT}"
-    else
-        echo -e "  ${RED}✗${NC} TCP转发规则不存在"
-    fi
+    # 重新加载systemd配置
+    systemctl daemon-reload
     
-    # 检查UDP规则
-    if iptables -t nat -C PREROUTING -p udp --dport ${LISTEN_PORT} -j DNAT --to-destination ${TARGET_IP}:${LISTEN_PORT} 2>/dev/null; then
-        echo -e "  ${GREEN}✓${NC} UDP转发: ${LISTEN_PORT} -> ${TARGET_IP}:${LISTEN_PORT}"
+    # 启动并启用服务
+    systemctl enable ${SERVICE_NAME} > /dev/null 2>&1
+    systemctl start ${SERVICE_NAME}
+    
+    # 检查服务状态
+    sleep 1
+    if systemctl is-active --quiet ${SERVICE_NAME}; then
+        echo -e "  ${GREEN}✓ 服务已创建并启动: ${SERVICE_NAME}${NC}"
+        echo -e "  ${GREEN}✓ 转发: 0.0.0.0:${LISTEN_PORT} -> ${TARGET_HOST}:${TARGET_PORT}${NC}"
+        SERVICES_CREATED=$((SERVICES_CREATED + 1))
     else
-        echo -e "  ${RED}✗${NC} UDP转发规则不存在"
+        echo -e "  ${RED}✗ 服务启动失败: ${SERVICE_NAME}${NC}"
+        echo -e "  ${YELLOW}查看日志: journalctl -u ${SERVICE_NAME} -n 20${NC}"
     fi
     echo ""
 done
 
-echo "常用命令:"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "查看所有NAT规则:"
-echo "  iptables -t nat -L -n -v"
+# 检查服务状态
 echo ""
-echo "查看特定端口规则:"
-for LISTEN_PORT in "${PORTS[@]}"; do
-    echo "  端口 ${LISTEN_PORT}:"
-    echo "    iptables -t nat -L PREROUTING -n -v | grep ${LISTEN_PORT}"
-done
-echo ""
-echo "删除转发规则（示例，端口 ${PORTS[0]}）:"
-echo "  iptables -t nat -D PREROUTING -p tcp --dport ${PORTS[0]} -j DNAT --to-destination ${TARGET_IP}:${PORTS[0]}"
-echo "  iptables -t nat -D PREROUTING -p udp --dport ${PORTS[0]} -j DNAT --to-destination ${TARGET_IP}:${PORTS[0]}"
-echo ""
-echo "保存当前规则:"
-echo "  iptables-save > /etc/iptables/rules.v4"
-echo ""
-echo "恢复规则:"
-echo "  iptables-restore < /etc/iptables/rules.v4"
+echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${GREEN}所有转发服务创建完成！${NC}"
+echo -e "${GREEN}成功创建 ${SERVICES_CREATED}/${#PORTS[@]} 个服务${NC}"
+echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
 
-# 配置系统内核参数
+# 显示每个端口的服务状态
+echo -e "${BLUE}服务状态:${NC}"
+for LISTEN_PORT in "${PORTS[@]}"; do
+    SERVICE_NAME="gost-forward-${LISTEN_PORT}"
+    echo -e "\n${BLUE}端口 ${LISTEN_PORT}:${NC}"
+    
+    if systemctl is-active --quiet ${SERVICE_NAME}; then
+        echo -e "  ${GREEN}✓${NC} 服务运行中: ${SERVICE_NAME}"
+        echo -e "  ${GREEN}✓${NC} 转发: 0.0.0.0:${LISTEN_PORT} -> ${TARGET_HOST}:${LISTEN_PORT}"
+    else
+        echo -e "  ${RED}✗${NC} 服务未运行: ${SERVICE_NAME}"
+    fi
+done
+
+echo ""
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "常用命令:"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+echo "查看所有gost转发服务:"
+echo "  systemctl list-units 'gost-forward-*' --all"
+echo ""
+echo "查看特定端口服务:"
+for LISTEN_PORT in "${PORTS[@]}"; do
+    echo "  端口 ${LISTEN_PORT}:"
+    echo "    systemctl status gost-forward-${LISTEN_PORT}"
+    echo "    journalctl -u gost-forward-${LISTEN_PORT} -f"
+done
+echo ""
+echo "重启服务（示例，端口 ${PORTS[0]}）:"
+echo "  systemctl restart gost-forward-${PORTS[0]}"
+echo ""
+echo "停止服务（示例，端口 ${PORTS[0]}）:"
+echo "  systemctl stop gost-forward-${PORTS[0]}"
+echo ""
+echo "删除服务（示例，端口 ${PORTS[0]}）:"
+echo "  systemctl stop gost-forward-${PORTS[0]}"
+echo "  systemctl disable gost-forward-${PORTS[0]}"
+echo "  rm -f /etc/systemd/system/gost-forward-${PORTS[0]}.service"
+echo "  systemctl daemon-reload"
+echo ""
+echo "查看所有监听端口:"
+echo "  ss -tlnp | grep gost"
+echo ""
+
+# 配置系统内核参数（优化网络性能）
 echo -e "${YELLOW}配置系统内核参数...${NC}"
 cp /etc/sysctl.conf /etc/sysctl.conf.bk_$(date +%Y%m%d_%H%M%S)
 cat > /etc/sysctl.conf << 'SYSCTL_EOF'
@@ -379,3 +367,8 @@ if [ $? -eq 0 ]; then
 else
     echo -e "${RED}✗ 系统内核参数配置失败${NC}"
 fi
+
+echo ""
+echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${GREEN}配置完成！所有转发服务已启动并设置为开机自启${NC}"
+echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
