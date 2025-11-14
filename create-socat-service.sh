@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Gost 端口转发脚本（支持批量端口）
+# Realm 端口转发脚本（支持批量端口）
 # 用法: ./create-socat-service.sh <target_host> <port1> [port2] [port3] ...
 # 示例: ./create-socat-service.sh example.com 57074
 # 示例: ./create-socat-service.sh example.com 57074 12693 27057
@@ -55,21 +55,21 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
-# 检查gost是否安装
-if ! command -v gost &> /dev/null; then
-    echo -e "${YELLOW}未检测到gost，正在安装...${NC}"
+# 检查realm是否安装
+if ! command -v realm &> /dev/null; then
+    echo -e "${YELLOW}未检测到realm，正在安装...${NC}"
     
     # 检测系统架构
     ARCH=$(uname -m)
     case ${ARCH} in
         x86_64)
-            GOST_ARCH="amd64"
+            REALM_ARCH="x86_64"
             ;;
         aarch64|arm64)
-            GOST_ARCH="arm64"
+            REALM_ARCH="aarch64"
             ;;
         armv7l)
-            GOST_ARCH="armv7"
+            REALM_ARCH="armv7"
             ;;
         *)
             echo -e "${RED}错误: 不支持的系统架构 ${ARCH}${NC}"
@@ -77,20 +77,20 @@ if ! command -v gost &> /dev/null; then
             ;;
     esac
     
-    # 下载最新版gost
-    GOST_VERSION="3.0.0-rc10"
+    # 下载最新版realm
+    REALM_VERSION="2.6.1"
     
     # 定义多个下载源（包括国内镜像）
     DOWNLOAD_URLS=(
-        "https://edgecname.gh-proxy.com/https://github.com/ginuerzh/gost/releases/download/v${GOST_VERSION}/gost_${GOST_VERSION}_linux_${GOST_ARCH}.tar.gz"
-        "https://ghproxy.com/https://github.com/ginuerzh/gost/releases/download/v${GOST_VERSION}/gost_${GOST_VERSION}_linux_${GOST_ARCH}.tar.gz"
-        "https://github.moeyy.xyz/https://github.com/ginuerzh/gost/releases/download/v${GOST_VERSION}/gost_${GOST_VERSION}_linux_${GOST_ARCH}.tar.gz"
-        "https://gh.ddlc.top/https://github.com/ginuerzh/gost/releases/download/v${GOST_VERSION}/gost_${GOST_VERSION}_linux_${GOST_ARCH}.tar.gz"
-        "https://mirror.ghproxy.com/https://github.com/ginuerzh/gost/releases/download/v${GOST_VERSION}/gost_${GOST_VERSION}_linux_${GOST_ARCH}.tar.gz"
-        "https://github.com/ginuerzh/gost/releases/download/v${GOST_VERSION}/gost_${GOST_VERSION}_linux_${GOST_ARCH}.tar.gz"
+        "https://edgecname.gh-proxy.com/https://github.com/zhboner/realm/releases/download/v${REALM_VERSION}/realm-${REALM_ARCH}-unknown-linux-musl.tar.gz"
+        "https://ghproxy.com/https://github.com/zhboner/realm/releases/download/v${REALM_VERSION}/realm-${REALM_ARCH}-unknown-linux-musl.tar.gz"
+        "https://github.moeyy.xyz/https://github.com/zhboner/realm/releases/download/v${REALM_VERSION}/realm-${REALM_ARCH}-unknown-linux-musl.tar.gz"
+        "https://gh.ddlc.top/https://github.com/zhboner/realm/releases/download/v${REALM_VERSION}/realm-${REALM_ARCH}-unknown-linux-musl.tar.gz"
+        "https://mirror.ghproxy.com/https://github.com/zhboner/realm/releases/download/v${REALM_VERSION}/realm-${REALM_ARCH}-unknown-linux-musl.tar.gz"
+        "https://github.com/zhboner/realm/releases/download/v${REALM_VERSION}/realm-${REALM_ARCH}-unknown-linux-musl.tar.gz"
     )
     
-    echo -e "${YELLOW}正在下载 gost ${GOST_VERSION} (${GOST_ARCH})...${NC}"
+    echo -e "${YELLOW}正在下载 realm ${REALM_VERSION} (${REALM_ARCH})...${NC}"
     
     TMP_DIR=$(mktemp -d)
     cd ${TMP_DIR}
@@ -101,15 +101,15 @@ if ! command -v gost &> /dev/null; then
         DOWNLOAD_URL="${DOWNLOAD_URLS[$i]}"
         echo -e "${BLUE}尝试下载源 $((i+1))/${#DOWNLOAD_URLS[@]}...${NC}"
         
-        if wget --timeout=30 --tries=2 -q --show-progress "${DOWNLOAD_URL}" -O gost.tar.gz 2>/dev/null; then
+        if wget --timeout=30 --tries=2 -q --show-progress "${DOWNLOAD_URL}" -O realm.tar.gz 2>/dev/null; then
             # 验证下载的文件
-            if [ -f gost.tar.gz ] && [ -s gost.tar.gz ]; then
+            if [ -f realm.tar.gz ] && [ -s realm.tar.gz ]; then
                 echo -e "${GREEN}✓ 下载成功！${NC}"
                 DOWNLOAD_SUCCESS=1
                 break
             else
                 echo -e "${YELLOW}  下载的文件无效，尝试下一个源...${NC}"
-                rm -f gost.tar.gz
+                rm -f realm.tar.gz
             fi
         else
             echo -e "${YELLOW}  下载失败，尝试下一个源...${NC}"
@@ -119,11 +119,11 @@ if ! command -v gost &> /dev/null; then
     if [ $DOWNLOAD_SUCCESS -eq 0 ]; then
         echo ""
         echo -e "${RED}所有下载源都失败了！${NC}"
-        echo -e "${YELLOW}请尝试以下方法手动安装 gost:${NC}"
+        echo -e "${YELLOW}请尝试以下方法手动安装 realm:${NC}"
         echo ""
         echo "方法1: 从官方仓库下载"
-        echo "  访问: https://github.com/ginuerzh/gost/releases"
-        echo "  下载: gost_${GOST_VERSION}_linux_${GOST_ARCH}.tar.gz"
+        echo "  访问: https://github.com/zhboner/realm/releases"
+        echo "  下载: realm-${REALM_ARCH}-unknown-linux-musl.tar.gz"
         echo ""
         echo "方法2: 使用代理下载"
         echo "  export http_proxy=http://your-proxy:port"
@@ -133,56 +133,56 @@ if ! command -v gost &> /dev/null; then
         echo "方法3: 手动安装"
         echo "  1. 下载文件到本地"
         echo "  2. 执行以下命令:"
-        echo "     tar -xzf gost_${GOST_VERSION}_linux_${GOST_ARCH}.tar.gz"
-        echo "     sudo mv gost /usr/local/bin/"
-        echo "     sudo chmod +x /usr/local/bin/gost"
+        echo "     tar -xzf realm-${REALM_ARCH}-unknown-linux-musl.tar.gz"
+        echo "     sudo mv realm /usr/local/bin/"
+        echo "     sudo chmod +x /usr/local/bin/realm"
         echo ""
         echo "方法4: 使用 curl 下载（如果可用）"
-        echo "  curl -L https://github.com/ginuerzh/gost/releases/download/v${GOST_VERSION}/gost_${GOST_VERSION}_linux_${GOST_ARCH}.tar.gz -o gost.tar.gz"
+        echo "  curl -L https://github.com/zhboner/realm/releases/download/v${REALM_VERSION}/realm-${REALM_ARCH}-unknown-linux-musl.tar.gz -o realm.tar.gz"
         echo ""
         rm -rf ${TMP_DIR}
         exit 1
     fi
     
     # 解压并安装
-    echo -e "${YELLOW}正在安装 gost...${NC}"
-    if ! tar -xzf gost.tar.gz 2>/dev/null; then
+    echo -e "${YELLOW}正在安装 realm...${NC}"
+    if ! tar -xzf realm.tar.gz 2>/dev/null; then
         echo -e "${RED}解压失败，文件可能已损坏${NC}"
         rm -rf ${TMP_DIR}
         exit 1
     fi
     
-    if [ ! -f gost ]; then
-        echo -e "${RED}错误: 解压后未找到 gost 可执行文件${NC}"
+    if [ ! -f realm ]; then
+        echo -e "${RED}错误: 解压后未找到 realm 可执行文件${NC}"
         rm -rf ${TMP_DIR}
         exit 1
     fi
     
-    mv gost /usr/local/bin/
-    chmod +x /usr/local/bin/gost
+    mv realm /usr/local/bin/
+    chmod +x /usr/local/bin/realm
     
     rm -rf ${TMP_DIR}
     
-    if command -v gost &> /dev/null; then
-        echo -e "${GREEN}✓ gost 安装成功！${NC}"
-        gost -V
+    if command -v realm &> /dev/null; then
+        echo -e "${GREEN}✓ realm 安装成功！${NC}"
+        realm --version
     else
-        echo -e "${RED}✗ gost 安装失败${NC}"
+        echo -e "${RED}✗ realm 安装失败${NC}"
         exit 1
     fi
 fi
 
-echo -e "${GREEN}开始创建 Gost 端口转发服务...${NC}"
+echo -e "${GREEN}开始创建 Realm 端口转发服务...${NC}"
 echo -e "${BLUE}目标地址: ${TARGET_HOST}${NC}"
 echo -e "${BLUE}端口列表: ${PORTS[*]}${NC}"
 echo -e "${BLUE}共 ${#PORTS[@]} 个端口${NC}"
 echo ""
 
-# 为每个端口创建gost服务
+# 为每个端口创建realm服务
 SERVICES_CREATED=0
 for LISTEN_PORT in "${PORTS[@]}"; do
     TARGET_PORT=$LISTEN_PORT  # 目标端口与监听端口相同
-    SERVICE_NAME="gost-forward-${LISTEN_PORT}"
+    SERVICE_NAME="realm-forward-${LISTEN_PORT}"
     
     echo -e "${YELLOW}[端口 ${LISTEN_PORT}] 创建转发服务...${NC}"
     
@@ -195,16 +195,17 @@ for LISTEN_PORT in "${PORTS[@]}"; do
     # 创建systemd服务文件
     cat > /etc/systemd/system/${SERVICE_NAME}.service <<EOF
 [Unit]
-Description=Gost Port Forward ${LISTEN_PORT} -> ${TARGET_HOST}:${TARGET_PORT}
+Description=Realm Port Forward ${LISTEN_PORT} -> ${TARGET_HOST}:${TARGET_PORT}
 After=network.target
 Wants=network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/gost -L tcp://0.0.0.0:${LISTEN_PORT}/${TARGET_HOST}:${TARGET_PORT}
+ExecStart=/usr/local/bin/realm -l 0.0.0.0:${LISTEN_PORT} -r ${TARGET_HOST}:${TARGET_PORT}
 Restart=always
 RestartSec=3
 User=root
+LimitNOFILE=65535
 
 [Install]
 WantedBy=multi-user.target
@@ -241,7 +242,7 @@ echo ""
 # 显示每个端口的服务状态
 echo -e "${BLUE}服务状态:${NC}"
 for LISTEN_PORT in "${PORTS[@]}"; do
-    SERVICE_NAME="gost-forward-${LISTEN_PORT}"
+    SERVICE_NAME="realm-forward-${LISTEN_PORT}"
     echo -e "\n${BLUE}端口 ${LISTEN_PORT}:${NC}"
     
     if systemctl is-active --quiet ${SERVICE_NAME}; then
@@ -258,30 +259,33 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo "常用命令:"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
-echo "查看所有gost转发服务:"
-echo "  systemctl list-units 'gost-forward-*' --all"
+echo "查看所有realm转发服务:"
+echo "  systemctl list-units 'realm-forward-*' --all"
 echo ""
 echo "查看特定端口服务:"
 for LISTEN_PORT in "${PORTS[@]}"; do
     echo "  端口 ${LISTEN_PORT}:"
-    echo "    systemctl status gost-forward-${LISTEN_PORT}"
-    echo "    journalctl -u gost-forward-${LISTEN_PORT} -f"
+    echo "    systemctl status realm-forward-${LISTEN_PORT}"
+    echo "    journalctl -u realm-forward-${LISTEN_PORT} -f"
 done
 echo ""
 echo "重启服务（示例，端口 ${PORTS[0]}）:"
-echo "  systemctl restart gost-forward-${PORTS[0]}"
+echo "  systemctl restart realm-forward-${PORTS[0]}"
 echo ""
 echo "停止服务（示例，端口 ${PORTS[0]}）:"
-echo "  systemctl stop gost-forward-${PORTS[0]}"
+echo "  systemctl stop realm-forward-${PORTS[0]}"
 echo ""
 echo "删除服务（示例，端口 ${PORTS[0]}）:"
-echo "  systemctl stop gost-forward-${PORTS[0]}"
-echo "  systemctl disable gost-forward-${PORTS[0]}"
-echo "  rm -f /etc/systemd/system/gost-forward-${PORTS[0]}.service"
+echo "  systemctl stop realm-forward-${PORTS[0]}"
+echo "  systemctl disable realm-forward-${PORTS[0]}"
+echo "  rm -f /etc/systemd/system/realm-forward-${PORTS[0]}.service"
 echo "  systemctl daemon-reload"
 echo ""
 echo "查看所有监听端口:"
-echo "  ss -tlnp | grep gost"
+echo "  ss -tlnp | grep realm"
+echo ""
+echo "手动测试转发（示例，端口 ${PORTS[0]}）:"
+echo "  realm -l 0.0.0.0:${PORTS[0]} -r ${TARGET_HOST}:${PORTS[0]}"
 echo ""
 
 # 配置系统内核参数（优化网络性能）
