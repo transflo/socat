@@ -79,28 +79,91 @@ if ! command -v gost &> /dev/null; then
     
     # 下载最新版gost
     GOST_VERSION="3.0.0-rc10"
-    DOWNLOAD_URL="https://github.com/ginuerzh/gost/releases/download/v${GOST_VERSION}/gost_${GOST_VERSION}_linux_${GOST_ARCH}.tar.gz"
+    
+    # 定义多个下载源（包括国内镜像）
+    DOWNLOAD_URLS=(
+        "https://ghproxy.com/https://github.com/ginuerzh/gost/releases/download/v${GOST_VERSION}/gost_${GOST_VERSION}_linux_${GOST_ARCH}.tar.gz"
+        "https://github.moeyy.xyz/https://github.com/ginuerzh/gost/releases/download/v${GOST_VERSION}/gost_${GOST_VERSION}_linux_${GOST_ARCH}.tar.gz"
+        "https://gh.ddlc.top/https://github.com/ginuerzh/gost/releases/download/v${GOST_VERSION}/gost_${GOST_VERSION}_linux_${GOST_ARCH}.tar.gz"
+        "https://mirror.ghproxy.com/https://github.com/ginuerzh/gost/releases/download/v${GOST_VERSION}/gost_${GOST_VERSION}_linux_${GOST_ARCH}.tar.gz"
+        "https://github.com/ginuerzh/gost/releases/download/v${GOST_VERSION}/gost_${GOST_VERSION}_linux_${GOST_ARCH}.tar.gz"
+    )
     
     echo -e "${YELLOW}正在下载 gost ${GOST_VERSION} (${GOST_ARCH})...${NC}"
     
     TMP_DIR=$(mktemp -d)
     cd ${TMP_DIR}
     
-    if ! wget -q --show-progress "${DOWNLOAD_URL}" -O gost.tar.gz; then
-        echo -e "${RED}下载失败，请手动安装 gost${NC}"
-        echo "访问: https://github.com/ginuerzh/gost/releases"
+    # 尝试从多个源下载
+    DOWNLOAD_SUCCESS=0
+    for i in "${!DOWNLOAD_URLS[@]}"; do
+        DOWNLOAD_URL="${DOWNLOAD_URLS[$i]}"
+        echo -e "${BLUE}尝试下载源 $((i+1))/${#DOWNLOAD_URLS[@]}...${NC}"
+        
+        if wget --timeout=30 --tries=2 -q --show-progress "${DOWNLOAD_URL}" -O gost.tar.gz 2>/dev/null; then
+            # 验证下载的文件
+            if [ -f gost.tar.gz ] && [ -s gost.tar.gz ]; then
+                echo -e "${GREEN}✓ 下载成功！${NC}"
+                DOWNLOAD_SUCCESS=1
+                break
+            else
+                echo -e "${YELLOW}  下载的文件无效，尝试下一个源...${NC}"
+                rm -f gost.tar.gz
+            fi
+        else
+            echo -e "${YELLOW}  下载失败，尝试下一个源...${NC}"
+        fi
+    done
+    
+    if [ $DOWNLOAD_SUCCESS -eq 0 ]; then
+        echo ""
+        echo -e "${RED}所有下载源都失败了！${NC}"
+        echo -e "${YELLOW}请尝试以下方法手动安装 gost:${NC}"
+        echo ""
+        echo "方法1: 从官方仓库下载"
+        echo "  访问: https://github.com/ginuerzh/gost/releases"
+        echo "  下载: gost_${GOST_VERSION}_linux_${GOST_ARCH}.tar.gz"
+        echo ""
+        echo "方法2: 使用代理下载"
+        echo "  export http_proxy=http://your-proxy:port"
+        echo "  export https_proxy=http://your-proxy:port"
+        echo "  然后重新运行此脚本"
+        echo ""
+        echo "方法3: 手动安装"
+        echo "  1. 下载文件到本地"
+        echo "  2. 执行以下命令:"
+        echo "     tar -xzf gost_${GOST_VERSION}_linux_${GOST_ARCH}.tar.gz"
+        echo "     sudo mv gost /usr/local/bin/"
+        echo "     sudo chmod +x /usr/local/bin/gost"
+        echo ""
+        echo "方法4: 使用 curl 下载（如果可用）"
+        echo "  curl -L https://github.com/ginuerzh/gost/releases/download/v${GOST_VERSION}/gost_${GOST_VERSION}_linux_${GOST_ARCH}.tar.gz -o gost.tar.gz"
+        echo ""
         rm -rf ${TMP_DIR}
         exit 1
     fi
     
-    tar -xzf gost.tar.gz
+    # 解压并安装
+    echo -e "${YELLOW}正在安装 gost...${NC}"
+    if ! tar -xzf gost.tar.gz 2>/dev/null; then
+        echo -e "${RED}解压失败，文件可能已损坏${NC}"
+        rm -rf ${TMP_DIR}
+        exit 1
+    fi
+    
+    if [ ! -f gost ]; then
+        echo -e "${RED}错误: 解压后未找到 gost 可执行文件${NC}"
+        rm -rf ${TMP_DIR}
+        exit 1
+    fi
+    
     mv gost /usr/local/bin/
     chmod +x /usr/local/bin/gost
     
     rm -rf ${TMP_DIR}
     
     if command -v gost &> /dev/null; then
-        echo -e "${GREEN}✓ gost 安装成功${NC}"
+        echo -e "${GREEN}✓ gost 安装成功！${NC}"
         gost -V
     else
         echo -e "${RED}✗ gost 安装失败${NC}"
